@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "cd .. && npm run dev",
-    "build": "cd .. && npm run build",
+    "build": "node ../data/parseSchedule.js && shx cp -r ../data/ ./src/ && vite build",
     "preview": "cd .. && npm run preview"
   }
 }
