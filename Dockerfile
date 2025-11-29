@@ -1,53 +1,67 @@
-# ----------------------------
-# 1. Frontend build stage
-# ----------------------------
-FROM node:18 AS frontend
-WORKDIR /app
+# --- Build client (Vite) ---
+FROM node:18-alpine AS frontend-build
+WORKDIR /build
 
-COPY client/package.json client/package-lock.json ./client/
-RUN cd client && npm install
-
+# Install dependencies & build client
+COPY client/package*.json client/tsconfig.* client/vite.config.* ./client/
+# copy full client source
 COPY client ./client
-COPY data ./data
+WORKDIR /build/client
 
-RUN cd client && npm run build
+RUN npm ci --silent
+RUN npm run build
 
+# --- Build Python app ---
+FROM python:3.12-slim AS python-base
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    POETRY_VIRTUALENVS_CREATE=false
 
-
-# ----------------------------
-# 2. Backend stage
-# ----------------------------
-FROM python:3.12-slim AS backend
-
-WORKDIR /app
-
-# System deps (build-essential for some pip packages)
+# Install system deps needed for common Python packages (adjust if you know you need more)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
+    ca-certificates \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install backend dependencies
+# Create app user
+RUN useradd --create-home --shell /bin/bash appuser
+WORKDIR /app
+
+# Copy and install python requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip setuptools wheel
+RUN pip install -r requirements.txt
 
-# Copy backend code
-COPY server ./server
-COPY migrations ./migrations
-COPY data ./data
-COPY shubble.py .
-COPY .flaskenv .
+# Copy application source
+COPY . /app
 
-# Copy frontend build into container
-COPY --from=frontend /app/client/dist ./client_dist
+# Copy built frontend into Flask static folder.
+# The Vite build output is typically in /build/client/dist. We copy its contents into /app/static
+# so Flask can serve the static single-page app. Adjust the destination if your app expects otherwise.
+COPY --from=frontend-build /build/client/dist /app/static
 
-# Placeholder env vars (Dokploy will override these)
-ENV PORT=8000 \
-    LOG_LEVEL=info \
-    DATABASE_URL=__REPLACE_ME__ \
-    SECRET_KEY=__REPLACE_ME__ \
-    OTHER_API_KEY=__REPLACE_ME__
+# Make entrypoint executable (we'll add this file next)
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-EXPOSE 8000
+# Make sure app files are owned by non-root user
+RUN chown -R appuser:appuser /app /usr/local/bin/docker-entrypoint.sh
 
-# Default process = web server
-CMD ["gunicorn", "shubble:app", "--bind", "0.0.0.0:8000"]
+USER appuser
+
+# Expose default port (can be overridden by $PORT)
+ENV PORT=8000
+EXPOSE ${PORT}
+
+# Healthcheck: hits root by default. If your app exposes a /health route, change it here.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
+  CMD curl -f http://localhost:${PORT} || exit 1
+
+# Entrypoint will optionally run migrations when RUN_MIGRATIONS=true, then exec the CMD
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Default command uses the same process as your Procfile's web process.
+# It expects environment variables PORT and LOG_LEVEL to be provided by the runtime.
+CMD ["gunicorn", "shubble:app", "--bind", "0.0.0.0:8000", "--workers", "4", "--log-level", "info"]
