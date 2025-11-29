@@ -2,18 +2,16 @@
 # 1. Frontend build stage
 # ----------------------------
 FROM node:18 AS frontend
-
 WORKDIR /app
 
-# Install dependencies
 COPY client/package.json client/package-lock.json ./client/
 RUN cd client && npm install
 
-# Copy source
 COPY client ./client
+COPY data ./data
 
-# Build Vite client
 RUN cd client && npm run build
+
 
 
 # ----------------------------
