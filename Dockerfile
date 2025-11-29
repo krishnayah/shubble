@@ -3,16 +3,17 @@
 ###############################################
 FROM node:20 AS frontend-builder
 
-WORKDIR /app/frontend
+WORKDIR /app/client
 
-# Copy only frontend dirs
-COPY client/ ./ 
+# Copy only frontend files
+COPY client/package*.json ./
+COPY client/ ./
 COPY data/ ./data/
 
 # Install deps
 RUN npm install
 
-# Build frontend
+# Build Vite app
 RUN npm run build
 
 
@@ -32,28 +33,21 @@ WORKDIR /app
 
 # Copy Python dependencies
 COPY requirements.txt .
-
-# Install pip deps
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
 COPY . .
 
-# Copy built frontend into backend (if your backend serves it)
-# adjust path if your Flask app expects static files elsewhere
-COPY --from=frontend-builder /app/frontend/dist ./client_build/
+# Copy built frontend into backend static directory
+COPY --from=frontend-builder /app/client/dist ./client_build/
 
-# Environment
-ENV PYTHONUNBUFFERED=1 \
-    FLASK_APP=server:create_app \
-    PORT=8000
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=server:create_app
+ENV PORT=8000
 
 EXPOSE 8000
 
 ###############################################
-# STAGE 3 — Final image
+# FINAL — Run web process
 ###############################################
-FROM backend AS final
-
-# Default command is web process
-CMD ["gunicorn", "shubble:app", "--bind", "0.0.0.0:8000", "--log-level", "info"]
+CMD ["gunicorn", "shubble:app", "--bind", "0.0.0.0:8000", "--log-level=info"]
